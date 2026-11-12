@@ -27,9 +27,13 @@ import org.keycloak.sessions.AuthenticationSessionModel;
 
 public class VlnEmailOtpAuthenticator implements Authenticator {
 
-    public static final String ACTION_SEND_CODE = "sendOtp";
+    public static final String ACTION_SEND_CODE = "sendCode";
     public static final String ACTION_LOGIN = "login";
-    public static final String ACTION_RESEND = "resendOtp";
+    public static final String ACTION_RESEND = "resendCode";
+    public static final String ACTION_SEND_CODE_LEGACY = "sendOtp";
+    public static final String ACTION_RESEND_LEGACY = "resendOtp";
+    public static final String LOGIN_MODE_PASSWORD = "PASSWORD";
+    public static final String LOGIN_MODE_OTP = "OTP";
 
     public static final String AUTH_NOTE_OTP_HASH = "vln.otp.hash";
     public static final String AUTH_NOTE_OTP_EXPIRES_AT = "vln.otp.expiresAt";
@@ -47,14 +51,9 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
 
     private final SecureRandom secureRandom = new SecureRandom();
 
-    private enum DeliveryMode {
-        EMAIL,
-        DEV
-    }
-
     @Override
     public void authenticate(AuthenticationFlowContext context) {
-        // Initial OIDC challenge: render the custom form without any credential validation.
+        setLoginMode(context, LOGIN_MODE_PASSWORD);
         context.challenge(buildChallenge(context, null));
     }
 
@@ -66,7 +65,8 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
     @Override
     public void action(AuthenticationFlowContext context) {
         MultivaluedMap<String, String> form = context.getHttpRequest().getDecodedFormParameters();
-        String action = getFirst(form, "action");
+        String action = normalizeAction(getFirst(form, "action"));
+        String loginMode = normalizeLoginMode(getFirst(form, "loginMode"));
         String username = getFirst(form, "username");
         String password = getFirst(form, "password");
         String otp = getFirst(form, "otp");
@@ -75,13 +75,34 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
             action = ACTION_LOGIN;
         }
 
-        if (ACTION_SEND_CODE.equalsIgnoreCase(action) || ACTION_RESEND.equalsIgnoreCase(action)) {
-            handleSendCode(context, username, password);
+        if (ACTION_SEND_CODE.equalsIgnoreCase(action) || ACTION_SEND_CODE_LEGACY.equalsIgnoreCase(action)) {
+            if (!LOGIN_MODE_OTP.equals(loginMode)) {
+                challengeWithError(context, "Use the verification code option to request a code.");
+                return;
+            }
+            handleSendCode(context, username, false);
+            return;
+        }
+
+        if (ACTION_RESEND.equalsIgnoreCase(action) || ACTION_RESEND_LEGACY.equalsIgnoreCase(action)) {
+            if (!LOGIN_MODE_OTP.equals(loginMode)) {
+                challengeWithError(context, "Use the verification code option to resend a code.");
+                return;
+            }
+            handleSendCode(context, username, true);
             return;
         }
 
         if (ACTION_LOGIN.equalsIgnoreCase(action)) {
-            handleLogin(context, username, password, otp);
+            if (LOGIN_MODE_PASSWORD.equals(loginMode)) {
+                handlePasswordLogin(context, username, password);
+                return;
+            }
+            if (LOGIN_MODE_OTP.equals(loginMode)) {
+                handleOtpLogin(context, username, otp);
+                return;
+            }
+            challengeWithError(context, "Invalid login method selected.");
             return;
         }
 
@@ -103,36 +124,28 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         // No additional required actions for the PoC.
     }
 
-    private void handleSendCode(AuthenticationFlowContext context, String username, String password) {
+    private void handleSendCode(AuthenticationFlowContext context, String username, boolean isResend) {
         if (username == null || username.isBlank()) {
-            challengeWithError(context, "Missing username or email.");
+            challengeWithError(context, "Username or email is required.");
             return;
         }
 
         UserModel user = resolveUser(context, username);
         if (user == null) {
-            challengeWithError(context, "Invalid username or password.");
+            genericOtpMessage(context, isResend);
             return;
         }
         if (!user.isEnabled()) {
-            challengeWithError(context, "Account is disabled.");
-            return;
-        }
-        if (password == null || password.isBlank()) {
-            challengeWithError(context, "Password is required.");
-            return;
-        }
-        if (!validatePassword(user, password)) {
-            challengeWithError(context, "Invalid username or password.");
+            genericOtpMessage(context, isResend);
             return;
         }
 
         String email = safeUserEmail(user);
         if (email == null || email.isBlank()) {
-            challengeWithError(context, "User has no registered email address.");
+            genericOtpMessage(context, isResend);
             return;
         }
-        if (isCooldownActive(context)) {
+        if (isCooldownActive(context) && !isResend) {
             challengeWithError(context, "Please wait before requesting a new verification code.");
             return;
         }
@@ -180,17 +193,13 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         challengeWithInfo(context, "Verification code sent. Please check your email.");
     }
 
-    private void handleLogin(AuthenticationFlowContext context, String username, String password, String otp) {
+    private void handlePasswordLogin(AuthenticationFlowContext context, String username, String password) {
         if (username == null || username.isBlank()) {
             challengeWithError(context, "Username or email is required.");
             return;
         }
         if (password == null || password.isBlank()) {
             challengeWithError(context, "Password is required.");
-            return;
-        }
-        if (otp == null || otp.isBlank()) {
-            challengeWithError(context, "Verification code is required.");
             return;
         }
 
@@ -201,6 +210,26 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         }
         if (!validatePassword(user, password)) {
             challengeWithError(context, "Invalid username or password.");
+            return;
+        }
+
+        context.setUser(user);
+        context.success();
+    }
+
+    private void handleOtpLogin(AuthenticationFlowContext context, String username, String otp) {
+        if (username == null || username.isBlank()) {
+            challengeWithError(context, "Username or email is required.");
+            return;
+        }
+        if (otp == null || otp.isBlank()) {
+            challengeWithError(context, "Verification code is required.");
+            return;
+        }
+
+        UserModel user = resolveUser(context, username);
+        if (user == null) {
+            challengeWithError(context, "Invalid verification code. Please try again.");
             return;
         }
 
@@ -264,6 +293,46 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
             form.addError(new FormMessage("username", error));
         }
         return form.createLoginUsernamePassword();
+    }
+
+    private void setLoginMode(AuthenticationFlowContext context, String loginMode) {
+        if (context == null || context.getAuthenticationSession() == null) {
+            return;
+        }
+        if (loginMode == null || loginMode.isBlank()) {
+            loginMode = LOGIN_MODE_PASSWORD;
+        }
+        context.getAuthenticationSession().setAuthNote("vln.loginMode", loginMode.trim().toUpperCase());
+    }
+
+    private String normalizeLoginMode(String value) {
+        if (value == null || value.isBlank()) {
+            return LOGIN_MODE_PASSWORD;
+        }
+        String normalized = value.trim().toUpperCase();
+        if (LOGIN_MODE_PASSWORD.equals(normalized) || LOGIN_MODE_OTP.equals(normalized)) {
+            return normalized;
+        }
+        return LOGIN_MODE_PASSWORD;
+    }
+
+    private String normalizeAction(String value) {
+        if (value == null || value.isBlank()) {
+            return ACTION_LOGIN;
+        }
+        String normalized = value.trim();
+        if (ACTION_LOGIN.equalsIgnoreCase(normalized)) return ACTION_LOGIN;
+        if (ACTION_SEND_CODE.equalsIgnoreCase(normalized) || ACTION_SEND_CODE_LEGACY.equalsIgnoreCase(normalized)) return ACTION_SEND_CODE;
+        if (ACTION_RESEND.equalsIgnoreCase(normalized) || ACTION_RESEND_LEGACY.equalsIgnoreCase(normalized)) return ACTION_RESEND;
+        return ACTION_LOGIN;
+    }
+
+    private void genericOtpMessage(AuthenticationFlowContext context, boolean resend) {
+        if (resend) {
+            challengeWithInfo(context, "If the account is valid, a verification code has been sent.");
+            return;
+        }
+        challengeWithInfo(context, "If the account is valid, a verification code has been sent.");
     }
 
     private UserModel resolveUser(AuthenticationFlowContext context, String username) {
