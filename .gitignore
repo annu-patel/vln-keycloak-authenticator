@@ -1,0 +1,17 @@
+# Maven
+target/
+
+# IntelliJ
+.idea/
+*.iml
+
+# Logs
+*.log
+
+# Secrets
+.env
+application-local.properties
+
+# OS files
+.DS_Store
+Thumbs.db
