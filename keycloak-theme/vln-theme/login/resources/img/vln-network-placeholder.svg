@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-label="VLN network placeholder">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1">
+      <stop offset="0%" stop-color="#0a2647"/>
+      <stop offset="100%" stop-color="#123d73"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="420" fill="url(#bg)"/>
+  <g fill="none" stroke="#73d4ff" stroke-opacity="0.85" stroke-width="2">
+    <circle cx="120" cy="96" r="58"/>
+    <circle cx="242" cy="156" r="76"/>
+    <circle cx="410" cy="116" r="70"/>
+    <circle cx="514" cy="248" r="58"/>
+    <circle cx="278" cy="324" r="66"/>
+    <path d="M120 96 L242 156 L410 116 L514 248 L278 324"/>
+    <path d="M242 156 L278 324"/>
+    <path d="M120 96 L278 324"/>
+    <path d="M410 116 L278 324"/>
+    <path d="M514 248 L410 116"/>
+  </g>
+  <g fill="#bfeaff" fill-opacity="0.9">
+    <circle cx="120" cy="96" r="7"/>
+    <circle cx="242" cy="156" r="7"/>
+    <circle cx="410" cy="116" r="7"/>
+    <circle cx="514" cy="248" r="7"/>
+    <circle cx="278" cy="324" r="7"/>
+  </g>
+</svg>
