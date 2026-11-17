@@ -56,7 +56,6 @@ public class VlnEmailOtpAuthenticatorFactory implements AuthenticatorFactory {
     public AuthenticationExecutionModel.Requirement[] getRequirementChoices() {
         return new AuthenticationExecutionModel.Requirement[] {
                 AuthenticationExecutionModel.Requirement.REQUIRED,
-                AuthenticationExecutionModel.Requirement.ALTERNATIVE,
                 AuthenticationExecutionModel.Requirement.DISABLED
         };
     }

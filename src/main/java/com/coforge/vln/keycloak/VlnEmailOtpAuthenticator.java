@@ -34,6 +34,8 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
     public static final String ACTION_RESEND_LEGACY = "resendOtp";
     public static final String LOGIN_MODE_PASSWORD = "PASSWORD";
     public static final String LOGIN_MODE_OTP = "OTP";
+    private static final String AUTH_NOTE_PASSWORD_VALIDATED = "vln.password.validated";
+    private static final String AUTH_NOTE_CURRENT_MODE = "vln.loginMode";
 
     public static final String AUTH_NOTE_OTP_HASH = "vln.otp.hash";
     public static final String AUTH_NOTE_OTP_EXPIRES_AT = "vln.otp.expiresAt";
@@ -53,8 +55,9 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
 
     @Override
     public void authenticate(AuthenticationFlowContext context) {
+        clearPasswordAndOtpState(context.getAuthenticationSession());
         setLoginMode(context, LOGIN_MODE_PASSWORD);
-        context.challenge(buildChallenge(context, null));
+        context.challenge(buildPasswordChallenge(context, null));
     }
 
     @Override
@@ -77,7 +80,7 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
 
         if (ACTION_SEND_CODE.equalsIgnoreCase(action) || ACTION_SEND_CODE_LEGACY.equalsIgnoreCase(action)) {
             if (!LOGIN_MODE_OTP.equals(loginMode)) {
-                challengeWithError(context, "Use the verification code option to request a code.");
+                challengeWithError(context, "Password validation must succeed before requesting a verification code.");
                 return;
             }
             handleSendCode(context, username, false);
@@ -86,7 +89,7 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
 
         if (ACTION_RESEND.equalsIgnoreCase(action) || ACTION_RESEND_LEGACY.equalsIgnoreCase(action)) {
             if (!LOGIN_MODE_OTP.equals(loginMode)) {
-                challengeWithError(context, "Use the verification code option to resend a code.");
+                challengeWithError(context, "Password validation must succeed before resending a verification code.");
                 return;
             }
             handleSendCode(context, username, true);
@@ -95,7 +98,12 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
 
         if (ACTION_LOGIN.equalsIgnoreCase(action)) {
             if (LOGIN_MODE_PASSWORD.equals(loginMode)) {
-                handlePasswordLogin(context, username, password);
+                boolean passwordValid = handlePasswordLogin(context, username, password);
+                if (!passwordValid) {
+                    return;
+                }
+                setLoginMode(context, LOGIN_MODE_OTP);
+                handleSendCode(context, username, false);
                 return;
             }
             if (LOGIN_MODE_OTP.equals(loginMode)) {
@@ -106,7 +114,7 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
             return;
         }
 
-        context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, buildChallenge(context, "Invalid action requested."));
+        context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, buildPasswordChallenge(context, "Invalid action requested."));
     }
 
     @Override
@@ -125,6 +133,10 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
     }
 
     private void handleSendCode(AuthenticationFlowContext context, String username, boolean isResend) {
+        if (!"true".equalsIgnoreCase(context.getAuthenticationSession().getAuthNote(AUTH_NOTE_PASSWORD_VALIDATED))) {
+            challengeWithError(context, "Password validation must succeed before requesting a verification code.");
+            return;
+        }
         if (username == null || username.isBlank()) {
             challengeWithError(context, "Username or email is required.");
             return;
@@ -193,28 +205,30 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         challengeWithInfo(context, "Verification code sent. Please check your email.");
     }
 
-    private void handlePasswordLogin(AuthenticationFlowContext context, String username, String password) {
+    private boolean handlePasswordLogin(AuthenticationFlowContext context, String username, String password) {
         if (username == null || username.isBlank()) {
             challengeWithError(context, "Username or email is required.");
-            return;
+            return false;
         }
         if (password == null || password.isBlank()) {
             challengeWithError(context, "Password is required.");
-            return;
+            return false;
         }
 
         UserModel user = resolveUser(context, username);
         if (user == null) {
             challengeWithError(context, "Invalid username or password.");
-            return;
+            return false;
         }
         if (!validatePassword(user, password)) {
             challengeWithError(context, "Invalid username or password.");
-            return;
+            return false;
         }
 
+        context.getAuthenticationSession().setAuthNote(AUTH_NOTE_PASSWORD_VALIDATED, "true");
+        context.getAuthenticationSession().setAuthNote(AUTH_NOTE_OTP_EMAIL, safeUserEmail(user));
         context.setUser(user);
-        context.success();
+        return true;
     }
 
     private void handleOtpLogin(AuthenticationFlowContext context, String username, String otp) {
@@ -224,6 +238,11 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         }
         if (otp == null || otp.isBlank()) {
             challengeWithError(context, "Verification code is required.");
+            return;
+        }
+
+        if (!"true".equalsIgnoreCase(context.getAuthenticationSession().getAuthNote(AUTH_NOTE_PASSWORD_VALIDATED))) {
+            challengeWithError(context, "Password validation must succeed before entering the verification code.");
             return;
         }
 
@@ -272,26 +291,49 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         }
 
         clearOtpState(authSession);
+        authSession.removeAuthNote(AUTH_NOTE_PASSWORD_VALIDATED);
         context.setUser(user);
         context.success();
     }
 
     private void challengeWithError(AuthenticationFlowContext context, String error) {
         context.form().setError(error);
-        context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, buildChallenge(context, error));
+        LoginFormsProvider form = context.form();
+        if (getCurrentLoginMode(context) == LOGIN_MODE_OTP) {
+            context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, buildOtpChallenge(context, error));
+            return;
+        }
+        context.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, buildPasswordChallenge(context, error));
     }
 
     private void challengeWithInfo(AuthenticationFlowContext context, String info) {
         context.form().setInfo(info);
-        context.challenge(buildChallenge(context, null));
+        if (getCurrentLoginMode(context) == LOGIN_MODE_OTP) {
+            context.challenge(buildOtpChallenge(context, null));
+            return;
+        }
+        context.challenge(buildPasswordChallenge(context, null));
     }
 
-    private Response buildChallenge(AuthenticationFlowContext context, String error) {
+    private Response buildPasswordChallenge(AuthenticationFlowContext context, String error) {
         LoginFormsProvider form = context.form();
         form.setExecution(context.getExecution().getId());
+        form.setAttribute("loginMode", LOGIN_MODE_PASSWORD);
         if (error != null && !error.isBlank()) {
             form.addError(new FormMessage("username", error));
         }
+        setLoginMode(context, LOGIN_MODE_PASSWORD);
+        return form.createLoginUsernamePassword();
+    }
+
+    private Response buildOtpChallenge(AuthenticationFlowContext context, String error) {
+        LoginFormsProvider form = context.form();
+        form.setExecution(context.getExecution().getId());
+        form.setAttribute("loginMode", LOGIN_MODE_OTP);
+        if (error != null && !error.isBlank()) {
+            form.addError(new FormMessage("username", error));
+        }
+        setLoginMode(context, LOGIN_MODE_OTP);
         return form.createLoginUsernamePassword();
     }
 
@@ -302,7 +344,15 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
         if (loginMode == null || loginMode.isBlank()) {
             loginMode = LOGIN_MODE_PASSWORD;
         }
-        context.getAuthenticationSession().setAuthNote("vln.loginMode", loginMode.trim().toUpperCase());
+        context.getAuthenticationSession().setAuthNote(AUTH_NOTE_CURRENT_MODE, loginMode.trim().toUpperCase());
+    }
+
+    private String getCurrentLoginMode(AuthenticationFlowContext context) {
+        if (context == null || context.getAuthenticationSession() == null) {
+            return LOGIN_MODE_PASSWORD;
+        }
+        String value = context.getAuthenticationSession().getAuthNote(AUTH_NOTE_CURRENT_MODE);
+        return value == null || value.isBlank() ? LOGIN_MODE_PASSWORD : value.trim().toUpperCase();
     }
 
     private String normalizeLoginMode(String value) {
@@ -389,6 +439,20 @@ public class VlnEmailOtpAuthenticator implements Authenticator {
             return false;
         }
         return Objects.equals(hashOtp(rawOtp.trim()), storedHash);
+    }
+
+    private void clearPasswordAndOtpState(AuthenticationSessionModel authSession) {
+        if (authSession == null) {
+            return;
+        }
+        authSession.removeAuthNote(AUTH_NOTE_PASSWORD_VALIDATED);
+        authSession.removeAuthNote(AUTH_NOTE_CURRENT_MODE);
+        authSession.removeAuthNote(AUTH_NOTE_OTP_HASH);
+        authSession.removeAuthNote(AUTH_NOTE_OTP_EXPIRES_AT);
+        authSession.removeAuthNote(AUTH_NOTE_OTP_ATTEMPTS);
+        authSession.removeAuthNote(AUTH_NOTE_OTP_LAST_SENT);
+        authSession.removeAuthNote(AUTH_NOTE_OTP_EMAIL);
+        authSession.removeAuthNote(AUTH_NOTE_DEV_OTP);
     }
 
     private void clearOtpState(AuthenticationSessionModel authSession) {
