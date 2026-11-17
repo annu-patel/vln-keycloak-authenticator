@@ -1,17 +1,34 @@
-# Maven
+# Maven build output
 target/
+*.jar
 
-# IntelliJ
+# IDE
 .idea/
 *.iml
+.vscode/
 
 # Logs
 *.log
 
-# Secrets
+# Local/backup files
+*.bak
+*.tmp
+*.temp
+
+# Environment and secrets
 .env
+.env.*
 application-local.properties
 
-# OS files
-.DS_Store
-Thumbs.db
+# Keycloak runtime data
+data/
+realm-export/
+
+# Never commit exported users/credentials
+*-users-*.json
+
+# Never commit raw realm export
+realm-config/vln-poc-realm.json
+
+# Keep only sanitized realm configuration
+!realm-config/vln-poc-realm-sanitized.json

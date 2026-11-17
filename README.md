@@ -1,97 +1,195 @@
-# VLN Keycloak custom authentication PoC
+VLN Keycloak Authenticator PoC
+Custom Keycloak authentication implementation for the VLN Portal PoC.
 
-This project builds a Java 21 Keycloak 26.x custom authenticator provider and a matching custom login theme for the VLN Portal.
+Environment
+Keycloak: 26.8.2
+Realm: vln-poc
+Keycloak URL: http://localhost:9090
+Angular VLN Portal: http://localhost:4200
+Local SMTP: Mailpit
+Mailpit SMTP: 127.0.0.1:1025
+Mailpit UI: http://localhost:8025
+Authentication Flow
+VLN Portal → Keycloak → Username / Email + Password → Password validation → Email OTP → OTP verification → Successful authentication → Redirect to VLN Portal
 
-## Build
+The authentication flow is mandatory Password + Email OTP.
 
-```powershell
-cd .\vln-keycloak-authenticator
+Password and OTP are not alternative authentication methods.
+
+Features
+Custom VLN/SITA Keycloak login theme
+Username/password authentication
+Mandatory email OTP second factor
+OTP resend
+OTP expiration
+Mailpit SMTP support for local development
+Forgot Password using Keycloak native reset-credentials flow
+Realm role-based VLN Portal authorization
+Responsive login UI
+Mobile-compatible Keycloak theme
+Realm Roles
+The PoC includes the realm role:
+
+operator
+
+The VLN Portal maps the Keycloak operator role to:
+
+VFS Operator
+
+Repository Structure
+src/ Custom Keycloak authenticator Java implementation
+
+keycloak-theme/ vln-theme/ Custom VLN login theme, CSS and resources
+
+realm-config/ vln-poc-realm-sanitized.json
+
+The realm JSON committed to this repository is sanitized and must not contain passwords, client secrets, SMTP credentials, or exported users.
+
+Build
+From the repository root:
+
 mvn clean package
-```
 
-This produces a deployable JAR:
+Expected result:
 
-```text
-vln-keycloak-authenticator-1.0.0.jar
-```
+BUILD SUCCESS
 
-## Deploy to Keycloak
+The generated provider JAR will be available under:
 
-Copy the JAR into the Keycloak providers directory:
+target/vln-keycloak-authenticator-1.0.0.jar
 
-```powershell
-Copy-Item .\target\vln-keycloak-authenticator-1.0.0.jar "C:\path\to\keycloak\providers\"
-```
+Fresh System Recovery
+1. Install prerequisites
+Install:
 
-Then start Keycloak locally:
+Java 21 or the Java version compatible with the project
+Maven
+Git
+Keycloak 26.8.2
+Mailpit
+2. Clone repository
+git clone https://github.com/annu-patel/vln-keycloak-authenticator.git
 
-```powershell
-cd C:\path\to\keycloak
+cd vln-keycloak-authenticator
+
+git switch vln-mfa-forgot-password-final
+
+3. Build authenticator
+mvn clean package
+
+4. Deploy provider
+Copy:
+
+target/vln-keycloak-authenticator-1.0.0.jar
+
+to the Keycloak installation:
+
+providers/
+
+5. Deploy VLN theme
+Copy:
+
+keycloak-theme/vln-theme
+
+to:
+
+/themes/vln-theme
+
+6. Restore realm configuration
+Use:
+
+realm-config/vln-poc-realm-sanitized.json
+
+to restore/recreate the vln-poc realm configuration.
+
+Important:
+
+The committed realm configuration intentionally excludes sensitive secrets and user credentials.
+
+After restoration, manually configure any environment-specific values that are required.
+
+7. Configure local SMTP for Mailpit
+For local PoC testing configure Keycloak realm email settings:
+
+Host: 127.0.0.1 Port: 1025 SSL: Off StartTLS: Off Authentication: Off
+
+Start Mailpit and verify:
+
+http://localhost:8025
+
+8. Start Keycloak
+From the Keycloak installation directory:
+
 .\bin\kc.bat start-dev --http-port=9090
-```
 
-## Configure the realm and flow
+Admin Console:
 
-1. Create a realm named `vln-poc`.
-2. Open Authentication -> Flows.
-3. Duplicate the Browser flow as `VLN Browser MFA`.
-4. Add the authenticator `VLN Email OTP Authenticator` to the flow and set it to REQUIRED.
-5. Keep the built-in Browser flow untouched.
-6. In Authentication -> Bindings -> Browser Flow, select `VLN Browser MFA`.
-7. In Realm Settings -> Themes -> Login Theme, select `vln-theme`.
+http://localhost:9090/admin/
 
-## Theme
+9. Verify realm
+Confirm:
 
-The custom theme lives under:
+Realm: vln-poc
+Custom login theme: vln-theme
+Forgot Password: Enabled
+Realm role: operator
+VLN Browser MFA authentication flow
+Password authentication
+VLN Email OTP execution
+10. Create test user
+In:
 
-```text
-themes\vln-theme\
-  login\
-    theme.properties
-    login.ftl
-    resources\css\styles.css
-```
+Keycloak Admin Console → vln-poc → Users → Add user
 
-It renders a single page with username/email, password, verification code, send code, resend action, and login button.
+Configure:
 
-## Security notes
+Username
+Email
+First name
+Last name
+Permanent password
+Realm role: operator
+Do not store user passwords in Git.
 
-- Password validation uses Keycloak credential APIs.
-- OTP is generated with `SecureRandom`.
-- OTP is stored only in the Keycloak authentication session for the PoC.
-- OTP is single use and invalidated after successful validation.
-- Resend uses a cooldown and validation attempts are bounded.
-- Sensitive values are not logged.
-- The implementation intentionally keeps the public frontend separate and leaves authentication inside Keycloak.
-- Development delivery mode is explicitly unsafe and must never be enabled in UAT or production. It is for local PoC use only.
+11. Start VLN Portal
+Start the Angular VLN Portal separately.
 
-## Local development OTP delivery mode
+Local URL:
 
-This authenticator supports two modes:
+http://localhost:4200
 
-- `EMAIL`: default and safe production-style mode. Uses Keycloak `EmailSenderProvider` and requires SMTP/email configuration.
-- `DEV`: local-only mode. It still generates and validates a secure OTP exactly like the real flow, but it displays the OTP on the same custom login page for local testing. This must never be enabled outside a developer workstation.
+Expected authentication journey:
 
-Recommended configuration in Keycloak Admin Console for the `VLN Email OTP Authenticator`:
+VLN Portal → Keycloak login → Password → Email OTP → OTP verification → VLN Portal → VFS Operator access
 
-- `otpDeliveryMode`: `EMAIL` (default)
-- `otp.length`: `6`
-- `otp.expiration.minutes`: `5`
-- `otp.max.attempts`: `5`
-- `otp.resend.cooldown.seconds`: `30`
+Forgot Password Flow
+Forgot Password? → Username / Email → Keycloak sends reset email → Reset link → New password → Successful authentication → VLN Portal
 
-When `otpDeliveryMode=DEV`, the flow shows a development-only warning with the generated OTP on the screen. This is intentionally not hidden and is only for a local test environment.
+For local development, password-reset emails are captured in Mailpit.
 
-## Future Angular / Spring Boot integration
+Security Notes
+Never commit:
 
-The Angular application should use OIDC Authorization Code + PKCE S256 against the Keycloak public client `vln-frontend`. The custom Keycloak login page handles the combined username + password + email OTP challenge before the authorization code is issued.
+User passwords
+OTP values
+Keycloak client secrets
+SMTP passwords
+Admin passwords
+Raw Keycloak user exports
+H2 database files
+Access or refresh tokens
+Generated JAR files
+.env files
+Only sanitized configuration should be stored in Git.
 
-Spring Boot remains an OAuth2 resource server and validates the JWT access token, issuer, expiration, audience (if configured), and roles.
+Working Git Branch
+vln-mfa-forgot-password-final
 
-## Flow reference
+Recovery Checkpoint
+Use the final working branch as the source of truth:
 
-```text
-User -> Angular -> Keycloak OIDC login -> VLN custom login page -> Keycloak auth flow -> JWT -> Angular -> Spring Boot
-```
+git switch vln-mfa-forgot-password-final git pull
 
-This project intentionally does not add Angular auth logic or any Spring Boot OTP validation.
+Repository:
+
+https://github.com/annu-patel/vln-keycloak-authenticator
